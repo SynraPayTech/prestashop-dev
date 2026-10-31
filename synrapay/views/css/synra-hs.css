@@ -1,3 +1,7 @@
+/* The payment option's logo (synrapay.php setLogo): the classic theme puts no size on
+   a payment option image, so a wide PNG filled the whole column. Capped to the
+   height of the option's text, whatever the theme. */
+.payment-options img[src*="/modules/synrapay/"], .payment-option img[src*="/modules/synrapay/"], #payment-options img[src*="/modules/synrapay/"] { height: 26px; width: auto; max-width: 110px; vertical-align: middle; }
 .synra-pay-hs { max-width: 520px; }
 .synra-pay-hs .synra-pay-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .synra-pay-hs .synra-pay-test { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; padding: 3px 8px; border-radius: 999px; background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; }
