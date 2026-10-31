@@ -1,0 +1,14 @@
+{
+  "name": "synrapay/prestashop-synrapay",
+  "description": "SynraPay payment module for PrestaShop 8: SynraPay's own card fields (Direct API hosted session) on the checkout payment step.",
+  "type": "prestashop-module",
+  "version": "1.0.0",
+  "license": "proprietary",
+  "require": {
+    "php": ">=7.4.0"
+  },
+  "config": {
+    "prepend-autoloader": false,
+    "platform": { "php": "7.4.0" }
+  }
+}
