@@ -72,7 +72,7 @@ class SynrapayConfirmModuleFrontController extends SynrapayAbstractModuleFrontCo
         if ($frame_ok && SynraPayDirectClient::evidence($data)) {
             // Approved at the gateway, final settlement pending at SynraPay: do not keep the customer
             // waiting. The order is placed in "Awaiting SynraPay confirmation"; webhook / recheck finish it.
-            $id_order = $this->module->settleAwaiting($cart, $link);
+            $id_order = $this->module->settleAwaiting($cart, $link, $data);
             $this->json(['ok' => true, 'status' => 'paid', 'redirect' => $this->module->confirmationUrl($cart->id, $id_order, $customer->secure_key)]);
             return;
         }

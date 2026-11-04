@@ -14,9 +14,18 @@ class SynraPayLink
 {
     const TABLE = 'synrapay_cart';
 
+    /** Columns added after 1.0.1: [name => definition]. Added by installTable() and upgrade-1.0.2. */
+    const EXTRA_COLUMNS = [
+        'txn_id'    => 'VARCHAR(64) NOT NULL DEFAULT "" AFTER `gateway_ref`',
+        'auth_code' => 'VARCHAR(32) NOT NULL DEFAULT "" AFTER `txn_id`',
+    ];
+
+    /** @var array|null the table's column names, read once per request */
+    private static $columns = null;
+
     public static function installTable()
     {
-        return Db::getInstance()->execute('CREATE TABLE IF NOT EXISTS `' . _DB_PREFIX_ . self::TABLE . '` (
+        $ok = Db::getInstance()->execute('CREATE TABLE IF NOT EXISTS `' . _DB_PREFIX_ . self::TABLE . '` (
             `id_cart` INT(10) UNSIGNED NOT NULL,
             `id_order` INT(10) UNSIGNED NOT NULL DEFAULT 0,
             `direct_order_id` VARCHAR(64) NOT NULL DEFAULT "",
@@ -27,6 +36,8 @@ class SynraPayLink
             `env` VARCHAR(16) NOT NULL DEFAULT "",
             `status` VARCHAR(32) NOT NULL DEFAULT "created",
             `gateway_ref` VARCHAR(128) NOT NULL DEFAULT "",
+            `txn_id` VARCHAR(64) NOT NULL DEFAULT "",
+            `auth_code` VARCHAR(32) NOT NULL DEFAULT "",
             `history` TEXT,
             `attempts` INT(10) UNSIGNED NOT NULL DEFAULT 0,
             `checks` INT(10) UNSIGNED NOT NULL DEFAULT 0,
@@ -39,6 +50,35 @@ class SynraPayLink
             KEY `id_order` (`id_order`),
             KEY `status` (`status`)
         ) ENGINE=' . _MYSQL_ENGINE_ . ' DEFAULT CHARSET=utf8mb4');
+        return $ok && self::ensureColumns();
+    }
+
+    /** Adds the columns a table created by an older version lacks. Safe to run any number of times. */
+    public static function ensureColumns()
+    {
+        self::$columns = null;
+        foreach (self::EXTRA_COLUMNS as $name => $definition) {
+            if (!self::hasColumn($name)) {
+                if (!Db::getInstance()->execute('ALTER TABLE `' . _DB_PREFIX_ . self::TABLE . '` ADD COLUMN `' . $name . '` ' . $definition)) {
+                    return false;
+                }
+                self::$columns = null;
+            }
+        }
+        return true;
+    }
+
+    /** Whether the table has a column: until the upgrade has run, save() skips the newer ones. */
+    public static function hasColumn($name)
+    {
+        if (self::$columns === null) {
+            self::$columns = [];
+            $rows = Db::getInstance()->executeS('SHOW COLUMNS FROM `' . _DB_PREFIX_ . self::TABLE . '`');
+            foreach (is_array($rows) ? $rows : [] as $row) {
+                self::$columns[] = (string) $row['Field'];
+            }
+        }
+        return in_array((string) $name, self::$columns, true);
     }
 
     public static function getByCart($id_cart)
@@ -72,8 +112,9 @@ class SynraPayLink
     {
         $id_cart = (int) $id_cart;
         $cols = [];
-        foreach (['direct_order_id', 'merchant_order_id', 'currency', 'fp', 'env', 'status', 'gateway_ref', 'history'] as $k) {
-            if (array_key_exists($k, $data)) {
+        foreach (['direct_order_id', 'merchant_order_id', 'currency', 'fp', 'env', 'status', 'txn_id', 'auth_code', 'history'] as $k) {
+            // gateway_ref (before 1.0.2) stays in the table but is no longer written: it is SynraPay-internal.
+            if (array_key_exists($k, $data) && (!isset(self::EXTRA_COLUMNS[$k]) || self::hasColumn($k))) {
                 $cols[] = '`' . $k . '` = "' . pSQL((string) $data[$k]) . '"';
             }
         }

@@ -36,7 +36,7 @@ class SynraPay extends PaymentModule
     {
         $this->name = 'synrapay';
         $this->tab = 'payments_gateways';
-        $this->version = '1.0.1';
+        $this->version = '1.0.2';
         $this->author = 'SynraPay';
         $this->need_instance = 0;
         $this->ps_versions_compliancy = ['min' => '8.0.2', 'max' => _PS_VERSION_];
@@ -311,7 +311,7 @@ class SynraPay extends PaymentModule
         list($total, $currency, $id_currency) = $this->cartAmount($cart);
         $paid_amount = isset($data['amount']) && $data['amount'] !== null ? number_format(round((float) $data['amount'], 2), 2, '.', '') : null;
         $paid_ccy    = !empty($data['currency']) ? strtoupper((string) $data['currency']) : null;
-        $ref = (string) ($data['gateway_transaction_id'] ?? '');
+        $ids = $this->paymentIds($link, $data);
 
         if ($awaiting_order_id) {
             $order = new Order((int) $awaiting_order_id);
@@ -325,7 +325,10 @@ class SynraPay extends PaymentModule
                 return 0;
             }
             $this->changeState($order, (int) Configuration::get('PS_OS_PAYMENT'));
-            SynraPayLink::save((int) $cart->id, ['status' => 'paid', 'gateway_ref' => mb_substr($ref, 0, 128), 'awaiting_since' => null, 'id_order' => (int) $order->id]);
+            // The awaiting order had no payment line yet: the state change just added one, without an id.
+            $this->syncOrderPayments($order, $link, $ids['txn']);
+            $this->addOrderNote($order, $this->paymentNote($ids, $this->l('SynraPay: payment confirmed.')));
+            SynraPayLink::save((int) $cart->id, $this->idColumns($ids) + ['status' => 'paid', 'awaiting_since' => null, 'id_order' => (int) $order->id]);
             return (int) $order->id;
         }
 
@@ -335,22 +338,152 @@ class SynraPay extends PaymentModule
             return 0;
         }
         $customer = new Customer((int) $cart->id_customer);
-        $message = 'SynraPay transaction ' . $link['direct_order_id'] . ($ref !== '' ? ' (gateway ref ' . $ref . ')' : '');
-        $this->validateOrder((int) $cart->id, (int) Configuration::get('PS_OS_PAYMENT'), (float) $total, $this->displayName, $message, ['transaction_id' => $link['direct_order_id']], $id_currency, false, $customer->secure_key);
+        $message = $this->paymentNote($ids, $this->l('SynraPay: payment confirmed.'));
+        $this->validateOrder((int) $cart->id, (int) Configuration::get('PS_OS_PAYMENT'), (float) $total, $this->displayName, $message, ['transaction_id' => $ids['txn']], $id_currency, false, $customer->secure_key);
         $id_order = (int) $this->currentOrder;
-        SynraPayLink::save((int) $cart->id, ['status' => 'paid', 'gateway_ref' => mb_substr($ref, 0, 128), 'awaiting_since' => null, 'id_order' => $id_order]);
+        SynraPayLink::save((int) $cart->id, $this->idColumns($ids) + ['status' => 'paid', 'awaiting_since' => null, 'id_order' => $id_order]);
         return $id_order;
     }
 
     /** Approved in the card frame, SynraPay not final: place the order in the awaiting state. */
-    public function settleAwaiting(Cart $cart, array $link)
+    public function settleAwaiting(Cart $cart, array $link, array $data = [])
     {
         list($total, $currency, $id_currency) = $this->cartAmount($cart);
         $customer = new Customer((int) $cart->id_customer);
-        $this->validateOrder((int) $cart->id, (int) Configuration::get('SYNRAPAY_OS_AWAITING'), (float) $total, $this->displayName, 'SynraPay: card frame reported the payment approved; waiting for SynraPay\'s final confirmation (webhook or re-check). Transaction ' . $link['direct_order_id'], ['transaction_id' => $link['direct_order_id']], $id_currency, false, $customer->secure_key);
+        $ids = $this->paymentIds($link, $data);
+        $message = $this->paymentNote($ids, $this->l('SynraPay: card frame reported the payment approved; waiting for SynraPay\'s final confirmation (webhook or re-check).'));
+        $this->validateOrder((int) $cart->id, (int) Configuration::get('SYNRAPAY_OS_AWAITING'), (float) $total, $this->displayName, $message, ['transaction_id' => $ids['txn']], $id_currency, false, $customer->secure_key);
         $id_order = (int) $this->currentOrder;
-        SynraPayLink::save((int) $cart->id, ['status' => 'pending_confirmation', 'awaiting_since' => date('Y-m-d H:i:s'), 'checks' => 0, 'id_order' => $id_order]);
+        SynraPayLink::save((int) $cart->id, $this->idColumns($ids) + ['status' => 'pending_confirmation', 'awaiting_since' => date('Y-m-d H:i:s'), 'checks' => 0, 'id_order' => $id_order]);
         return $id_order;
+    }
+
+    /**
+     * The payment's ids for this link: what the answer carries, else what the link already holds.
+     *   txn          dashboard "Transaction ID" (synrapay_transaction_id), else the Direct API order_id
+     *   direct       the Direct API order_id (kept for API calls)
+     * No gateway reference: it is SynraPay-internal and never stored or shown by the module.
+     */
+    public function paymentIds(array $link, array $data)
+    {
+        $direct = (string) ($link['direct_order_id'] ?? '');
+        $got = SynraPayDirectClient::paymentIds($data, $direct);
+        $txn = $got['txn'];
+        if (!$got['txn_is_synrapay'] && !empty($link['txn_id'])) {
+            $txn = (string) $link['txn_id'];
+        }
+        $merchant = (string) ($link['merchant_order_id'] ?? '');
+        if ($merchant === '' && !empty($data['merchant_order_id']) && is_scalar($data['merchant_order_id'])) {
+            $merchant = (string) $data['merchant_order_id'];
+        }
+        return [
+            'merchant' => $merchant,
+            'txn'      => mb_substr($txn, 0, 64),
+            'direct'   => $direct,
+            'auth'     => mb_substr($got['auth'] !== '' ? $got['auth'] : (string) ($link['auth_code'] ?? ''), 0, 32),
+        ];
+    }
+
+    /** The ids as link-table columns (save() skips the ones an un-upgraded table lacks). */
+    private function idColumns(array $ids)
+    {
+        return ['txn_id' => $ids['txn'], 'auth_code' => $ids['auth']];
+    }
+
+    /** The private order message: every id the SynraPay merchant dashboard shows for this payment. */
+    public function paymentNote(array $ids, $headline)
+    {
+        $lines = [(string) $headline];
+        $lines[] = 'Merchant order ID: ' . ($ids['merchant'] !== '' ? $ids['merchant'] : '-');
+        $lines[] = 'Transaction ID: ' . ($ids['txn'] !== '' ? $ids['txn'] : '-');
+        $lines[] = 'SynraPay order ID: ' . ($ids['direct'] !== '' ? $ids['direct'] : '-');
+        if ($ids['auth'] !== '') {
+            $lines[] = 'Auth code: ' . $ids['auth'];
+        }
+        return implode("\n", $lines);
+    }
+
+    /**
+     * The order's SynraPay payment lines carry the dashboard Transaction ID: a line with no id, or one
+     * still on the Direct API order id, is moved to $txn. Lines another module or an employee added
+     * (other payment method, other id) are left alone. Returns true when a line changed.
+     */
+    public function syncOrderPayments(Order $order, array $link, $txn)
+    {
+        $txn = (string) $txn;
+        if ($txn === '') {
+            return false;
+        }
+        $changed = false;
+        try {
+            $old = array_filter([(string) ($link['direct_order_id'] ?? ''), (string) ($link['txn_id'] ?? '')]);
+            foreach (OrderPayment::getByOrderReference($order->reference) as $payment) {
+                if ($payment->payment_method !== $this->displayName && $payment->payment_method !== $order->payment) {
+                    continue;
+                }
+                $cur = (string) $payment->transaction_id;
+                if ($cur === $txn || ($cur !== '' && !in_array($cur, $old, true))) {
+                    continue;
+                }
+                $payment->transaction_id = $txn;
+                if ($payment->update()) {
+                    $changed = true;
+                }
+            }
+        } catch (Exception $e) {
+            $this->log('could not update the payment id on order #' . $order->id . ': ' . $e->getMessage(), 2);
+        }
+        return $changed;
+    }
+
+    /**
+     * An order already placed (paid) whose ids a later status read / webhook improves: the payment
+     * line takes the dashboard Transaction ID, the link keeps the new ids, the order gets a note.
+     */
+    public function refreshPaidIds(array $link, array $data)
+    {
+        $order = new Order((int) $link['id_order']);
+        if (!Validate::isLoadedObject($order)) {
+            return;
+        }
+        $ids = $this->paymentIds($link, $data);
+        $before = [!empty($link['txn_id']) ? (string) $link['txn_id'] : (string) $link['direct_order_id'], (string) ($link['auth_code'] ?? '')];
+        $moved = $this->syncOrderPayments($order, $link, $ids['txn']);
+        if (!$moved && $before === [$ids['txn'], $ids['auth']]) {
+            return;
+        }
+        SynraPayLink::save((int) $link['id_cart'], $this->idColumns($ids));
+        $this->addOrderNote($order, $this->paymentNote($ids, $this->l('SynraPay: payment ids updated.')));
+    }
+
+    /** A private message on the order, the way validateOrder() stores its own. Never blocks the caller. */
+    public function addOrderNote(Order $order, $text)
+    {
+        try {
+            $customer = new Customer((int) $order->id_customer);
+            $id_thread = (int) CustomerThread::getIdCustomerThreadByEmailAndIdOrder($customer->email, (int) $order->id);
+            if (!$id_thread) {
+                $thread = new CustomerThread();
+                $thread->id_contact  = 0;
+                $thread->id_customer = (int) $order->id_customer;
+                $thread->id_shop     = (int) $order->id_shop;
+                $thread->id_order    = (int) $order->id;
+                $thread->id_lang     = (int) $order->id_lang;
+                $thread->email       = $customer->email;
+                $thread->status      = 'open';
+                $thread->token       = Tools::passwdGen(12);
+                $thread->add();
+                $id_thread = (int) $thread->id;
+            }
+            $msg = new CustomerMessage();
+            $msg->id_customer_thread = $id_thread;
+            $msg->id_employee = 0;
+            $msg->message = (string) $text;
+            $msg->private = 1;
+            $msg->add();
+        } catch (Exception $e) {
+            $this->log('could not add a note to order #' . $order->id . ': ' . $e->getMessage(), 2);
+        }
     }
 
     /** A final decline on an order placed as awaiting → Payment error. */
@@ -403,6 +536,9 @@ class SynraPay extends PaymentModule
                 'notReady'   => $this->l('The card form is still loading.'),
                 'incomplete' => $this->l('Please complete your card details.'),
                 'declined'   => $this->l('Your payment was not completed. Please try again or use another card.'),
+                'failTitle'  => $this->l('Payment failed'),
+                'retry'      => $this->l('Retry payment'),
+                'retryHint'  => $this->l('You can try again with the same card or another one.'),
                 'expired'    => $this->l('The card session expired. A new one is loading…'),
                 'sdkFailed'  => $this->l('Could not load the card form. Please refresh the page.'),
             ],
