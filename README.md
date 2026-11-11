@@ -7,7 +7,7 @@ server.
 
 | | |
 |---|---|
-| 📦 Module | `synrapay` v1.0.0 — folder [`synrapay/`](./synrapay), zip `synrapay.zip` |
+| 📦 Module | `synrapay` v1.0.3 — folder [`synrapay/`](./synrapay), zip `synrapay.zip` |
 | 🛒 PrestaShop | 8.0.2 or greater |
 | 🐘 PHP | 7.4 or greater |
 | 🔐 Integration | SynraPay Direct API — hosted session, signature v2 |
@@ -83,7 +83,7 @@ Finally, **Payment → Preferences**: tick the currencies, countries and custome
 
 1. Set Environment = **Sandbox** with Sandbox keys, register the Sandbox webhook URL and origin.
 2. Place an order with a SynraPay sandbox test card.
-3. Check: an order with *Payment accepted*, the **SynraPay** card on the admin order page shows the order id and gateway reference, and the webhook arrived (Advanced Parameters → Logs, source *SynraPay*).
+3. Check: an order with *Payment accepted*, the **SynraPay** card on the admin order page shows the Merchant order ID, Transaction ID and auth code, and the webhook arrived (Advanced Parameters → Logs, source *SynraPay*).
 4. Switch Environment to **Live**, paste the Live keys, register the Live webhook URL and origin.
 
 ---
@@ -100,7 +100,7 @@ payment step    POST module/synrapay/session
    page         POST module/synrapay/confirm (polls)
    shop         GET /v1/direct/payment/{order_id}/status
                    CAPTURED / AUTHORIZED  → validateOrder(Payment accepted) → order confirmation
-                   FAILED / DECLINED …    → no order created, new card session for a retry
+                   FAILED / DECLINED …    → no order created; "Payment failed" stays on screen until the shopper presses Retry payment (new card session)
                    approved, not final    → validateOrder(Awaiting SynraPay confirmation) → order confirmation; webhook / cron finish it
    webhook      POST module/synrapay/webhook?token=<per-shop token>   signed (v2), source of truth; creates the order if the shopper left early
 ```
@@ -143,6 +143,7 @@ synrapay/
 ├── classes/SynraPayDirectClient.php      signed Direct API client, webhook verify, phone split
 ├── classes/SynraPayLink.php              ps_synrapay_cart: cart ↔ SynraPay order link
 ├── controllers/front/                    session, confirm, webhook, recheck
+├── upgrade/upgrade-1.0.2.php             adds txn_id / auth_code to ps_synrapay_cart
 ├── views/js/synra-hs.js                  mounts the card fields, intercepts the payment form submit, polls confirm
 └── views/templates/hook/                 payment option, hidden form, confirmation note, admin order card
 build-zip.sh                              builds dist/synrapay.zip
@@ -161,6 +162,9 @@ dist/                                     ready-to-install zip
 
 ## 📝 Changelog
 
+- **1.0.3** (2026-11-11) One transaction id. The Direct API order id is the Transaction ID the merchant dashboard shows, and every Direct API answer carries `transaction_id` equal to it. The order payment's Transaction ID is `transaction_id` (falling back to the Direct order id); `synrapay_transaction_id` is no longer read. Webhook settlement takes the Transaction ID from the webhook body's `transactionId` and no longer makes a status read for it. The order message and the admin order card list Merchant order ID, Transaction ID and auth code; the "SynraPay order ID" line is gone because it would repeat the Transaction ID. No schema change (no upgrade script).
+- **1.0.2** — Payment ids match the SynraPay merchant dashboard: the order payment's Transaction ID is SynraPay's Transaction ID (`synrapay_transaction_id`, falling back to the Direct order id), and the webhook makes one best-effort status read to fetch it; an order placed before it arrived has its payment Transaction ID corrected later. The order message and the admin order card list Merchant order ID, Transaction ID, SynraPay order ID and auth code. Gateway references are SynraPay-internal: the module no longer stores or shows one (the old `gateway_ref` column is kept but not written). New `txn_id` / `auth_code` columns (upgrade script `upgrade-1.0.2.php`). A failed or declined payment now stays on screen with a "Payment failed" panel and a **Retry payment** button instead of the card form re-opening after about a second (QA BUG_006).
+- **1.0.1** — Payment option logo at text height.
 - **1.0.0** — First release: hosted-session card fields on the payment step, order created only on payment, webhook, re-check cron, back-office configuration.
 
 ## 🙋 Support

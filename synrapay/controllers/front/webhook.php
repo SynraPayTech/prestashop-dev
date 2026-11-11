@@ -77,16 +77,20 @@ class SynrapayWebhookModuleFrontController extends SynrapayAbstractModuleFrontCo
                 $this->plain(200, 'ok (cart already ordered)');
                 return;
             }
+            // The webhook's transactionId IS the dashboard Transaction ID (one transaction id, equal to
+            // the Direct order id): no status read is needed for it. The signed body decides.
+            $txn_from_body = trim((string) ($body['transactionId'] ?? ''));
             $this->module->settlePaid($cart, $link, [
-                'order_id'               => $link['direct_order_id'],
-                'status'                 => $status,
-                'amount'                 => isset($body['amount']) ? $body['amount'] : null,
-                'currency'               => isset($body['currency']) ? $body['currency'] : null,
-                'gateway_transaction_id' => isset($body['gateway_transaction_id']) ? $body['gateway_transaction_id'] : (isset($body['transactionId']) ? $body['transactionId'] : ''),
+                'order_id'       => $link['direct_order_id'],
+                'transaction_id' => $txn_from_body !== '' ? $txn_from_body : (string) $link['direct_order_id'],
+                'status'         => $status,
+                'amount'         => isset($body['amount']) ? $body['amount'] : null,
+                'currency'       => isset($body['currency']) ? $body['currency'] : null,
             ], (int) $link['id_order']);
         } elseif (!$awaiting && in_array($status, ['failed', 'cancelled', 'canceled', 'expired', 'declined'], true)) {
             $this->module->settleFailed($link, $status, (string) ($body['error_message'] ?? ''));
         }
         $this->plain(200, 'ok');
     }
+
 }

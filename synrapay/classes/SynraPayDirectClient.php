@@ -24,7 +24,7 @@ if (class_exists('SynraPayDirectClient', false)) {
 
 class SynraPayDirectClient
 {
-    const VERSION = '1.0.0';
+    const VERSION = '1.0.2';
 
     const ENVS = [
         'develop' => ['api' => 'https://dev-api.synrapay.com/v1',     'sdk' => 'https://dev.js.synrapay.com/direct/v1/sdk.js',     'label' => 'Develop', 'prefix' => 'hs_dev_'],
@@ -221,8 +221,34 @@ class SynraPayDirectClient
     /** Does the status read show a payment was actually attempted (frame_ok may only be honoured then)? */
     public static function evidence(array $data): bool
     {
+        // transaction_id is not evidence: every status answer carries it (it equals order_id).
         return (isset($data['confirmation']) && $data['confirmation'] === 'awaiting_mastercard')
-            || !empty($data['gateway_transaction_id']) || !empty($data['transaction_id']) || !empty($data['transactionid']);
+            || !empty($data['gateway_transaction_id']);
+    }
+
+    /**
+     * The ids a status / payment answer carries, named as the SynraPay merchant dashboard names them:
+     *   txn          "Transaction ID"  = transaction_id (carried by every Direct API answer, always equal
+     *                to the Direct API order_id: one transaction id), else the Direct API order_id
+     *   auth         authorization code, when the answer has one
+     * Empty strings when absent. Gateway references are SynraPay-internal and are not taken.
+     */
+    public static function paymentIds(array $data, string $direct_order_id = ''): array
+    {
+        $pick = function (array $keys) use ($data) {
+            foreach ($keys as $k) {
+                if (isset($data[$k]) && is_scalar($data[$k]) && trim((string) $data[$k]) !== '') {
+                    return trim((string) $data[$k]);
+                }
+            }
+            return '';
+        };
+        $txn = $pick(['transaction_id']);
+        return [
+            'txn'             => $txn !== '' ? $txn : $direct_order_id,
+            'txn_from_answer' => $txn !== '',
+            'auth'            => $pick(['authorization_code', 'auth_code']),
+        ];
     }
 
     /** The environment a hosted-session client token was minted in, or '' when unprefixed. */
