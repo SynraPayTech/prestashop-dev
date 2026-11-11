@@ -221,13 +221,15 @@ class SynraPayDirectClient
     /** Does the status read show a payment was actually attempted (frame_ok may only be honoured then)? */
     public static function evidence(array $data): bool
     {
+        // transaction_id is not evidence: every status answer carries it (it equals order_id).
         return (isset($data['confirmation']) && $data['confirmation'] === 'awaiting_mastercard')
-            || !empty($data['gateway_transaction_id']) || !empty($data['transaction_id']) || !empty($data['transactionid']);
+            || !empty($data['gateway_transaction_id']);
     }
 
     /**
      * The ids a status / payment answer carries, named as the SynraPay merchant dashboard names them:
-     *   txn          "Transaction ID"  = synrapay_transaction_id, else the Direct API order_id
+     *   txn          "Transaction ID"  = transaction_id (carried by every Direct API answer, always equal
+     *                to the Direct API order_id: one transaction id), else the Direct API order_id
      *   auth         authorization code, when the answer has one
      * Empty strings when absent. Gateway references are SynraPay-internal and are not taken.
      */
@@ -241,10 +243,10 @@ class SynraPayDirectClient
             }
             return '';
         };
-        $txn = $pick(['synrapay_transaction_id']);
+        $txn = $pick(['transaction_id']);
         return [
             'txn'             => $txn !== '' ? $txn : $direct_order_id,
-            'txn_is_synrapay' => $txn !== '',
+            'txn_from_answer' => $txn !== '',
             'auth'            => $pick(['authorization_code', 'auth_code']),
         ];
     }

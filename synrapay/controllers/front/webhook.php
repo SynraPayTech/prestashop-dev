@@ -60,13 +60,6 @@ class SynrapayWebhookModuleFrontController extends SynrapayAbstractModuleFrontCo
             return;
         }
         if ($link['status'] === 'paid') {
-            // Already placed: a later webhook may still bring the dashboard ids the order was placed without.
-            if ((int) $link['id_order'] && $this->idsIncomplete($link)) {
-                $ids = $this->statusIds($link);
-                if ($ids) {
-                    $this->module->refreshPaidIds($link, $ids);
-                }
-            }
             $this->plain(200, 'ok');
             return;
         }
@@ -84,46 +77,20 @@ class SynrapayWebhookModuleFrontController extends SynrapayAbstractModuleFrontCo
                 $this->plain(200, 'ok (cart already ordered)');
                 return;
             }
-            // The webhook body has no dashboard Transaction ID (its transactionId is the Direct order id):
-            // one best-effort status read fetches it; the body still decides.
-            $this->module->settlePaid($cart, $link, array_merge([
-                'order_id' => $link['direct_order_id'],
-                'status'   => $status,
-                'amount'   => isset($body['amount']) ? $body['amount'] : null,
-                'currency' => isset($body['currency']) ? $body['currency'] : null,
-            ], $this->statusIds($link)), (int) $link['id_order']);
+            // The webhook's transactionId IS the dashboard Transaction ID (one transaction id, equal to
+            // the Direct order id): no status read is needed for it. The signed body decides.
+            $txn_from_body = trim((string) ($body['transactionId'] ?? ''));
+            $this->module->settlePaid($cart, $link, [
+                'order_id'       => $link['direct_order_id'],
+                'transaction_id' => $txn_from_body !== '' ? $txn_from_body : (string) $link['direct_order_id'],
+                'status'         => $status,
+                'amount'         => isset($body['amount']) ? $body['amount'] : null,
+                'currency'       => isset($body['currency']) ? $body['currency'] : null,
+            ], (int) $link['id_order']);
         } elseif (!$awaiting && in_array($status, ['failed', 'cancelled', 'canceled', 'expired', 'declined'], true)) {
             $this->module->settleFailed($link, $status, (string) ($body['error_message'] ?? ''));
         }
         $this->plain(200, 'ok');
     }
 
-    /** Has the link not got the dashboard Transaction ID yet (none, or still the Direct order id)? */
-    private function idsIncomplete(array $link)
-    {
-        $txn = (string) ($link['txn_id'] ?? '');
-        return $txn === '' || $txn === (string) $link['direct_order_id'];
-    }
-
-    /**
-     * ONE status read for the ids only (never the verdict): synrapay_transaction_id, authorization_code,
-     * merchant_order_id. [] when SynraPay cannot be read — the caller falls back.
-     */
-    private function statusIds(array $link)
-    {
-        if ((string) $link['direct_order_id'] === '' || !$this->module->isConfigured()) {
-            return [];
-        }
-        list($ok, $data) = $this->module->client()->status((string) $link['direct_order_id'], 10);
-        if (!$ok || !is_array($data)) {
-            return [];
-        }
-        $out = [];
-        foreach (['synrapay_transaction_id', 'authorization_code', 'merchant_order_id'] as $k) {
-            if (isset($data[$k]) && is_scalar($data[$k]) && (string) $data[$k] !== '') {
-                $out[$k] = (string) $data[$k];
-            }
-        }
-        return $out;
-    }
 }

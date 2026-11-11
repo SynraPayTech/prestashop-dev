@@ -36,7 +36,7 @@ class SynraPay extends PaymentModule
     {
         $this->name = 'synrapay';
         $this->tab = 'payments_gateways';
-        $this->version = '1.0.2';
+        $this->version = '1.0.3';
         $this->author = 'SynraPay';
         $this->need_instance = 0;
         $this->ps_versions_compliancy = ['min' => '8.0.2', 'max' => _PS_VERSION_];
@@ -360,7 +360,7 @@ class SynraPay extends PaymentModule
 
     /**
      * The payment's ids for this link: what the answer carries, else what the link already holds.
-     *   txn          dashboard "Transaction ID" (synrapay_transaction_id), else the Direct API order_id
+     *   txn          dashboard "Transaction ID" (transaction_id, always equal to the Direct API order_id), else the order_id
      *   direct       the Direct API order_id (kept for API calls)
      * No gateway reference: it is SynraPay-internal and never stored or shown by the module.
      */
@@ -369,7 +369,7 @@ class SynraPay extends PaymentModule
         $direct = (string) ($link['direct_order_id'] ?? '');
         $got = SynraPayDirectClient::paymentIds($data, $direct);
         $txn = $got['txn'];
-        if (!$got['txn_is_synrapay'] && !empty($link['txn_id'])) {
+        if (!$got['txn_from_answer'] && !empty($link['txn_id'])) {
             $txn = (string) $link['txn_id'];
         }
         $merchant = (string) ($link['merchant_order_id'] ?? '');
@@ -396,7 +396,6 @@ class SynraPay extends PaymentModule
         $lines = [(string) $headline];
         $lines[] = 'Merchant order ID: ' . ($ids['merchant'] !== '' ? $ids['merchant'] : '-');
         $lines[] = 'Transaction ID: ' . ($ids['txn'] !== '' ? $ids['txn'] : '-');
-        $lines[] = 'SynraPay order ID: ' . ($ids['direct'] !== '' ? $ids['direct'] : '-');
         if ($ids['auth'] !== '') {
             $lines[] = 'Auth code: ' . $ids['auth'];
         }
